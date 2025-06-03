@@ -15,8 +15,8 @@ import Vehicle.Compile.Prelude
 import Vehicle.Compile.Print (prettyVerbose)
 import Vehicle.Data.Assertion
 import Vehicle.Data.Code.BooleanExpr
-import Vehicle.Data.QuantifiedVariable (Variable)
-import Vehicle.Data.Tensor (RationalTensor)
+import Vehicle.Data.QuantifiedVariable
+import Vehicle.Data.Tensor (RatTensor)
 
 --------------------------------------------------------------------------------
 -- Data
@@ -26,20 +26,19 @@ import Vehicle.Data.Tensor (RationalTensor)
 -- field so we can either look for rational equalities, tensor equalities or
 -- no equalties at all.
 data ConstrainedAssertionTree
-  = SingleEquality !(Equality RationalTensor) !(MaybeTrivial AssertionTree)
-  | Inequalities !(ConjunctAll (Inequality RationalTensor)) !(MaybeTrivial AssertionTree)
-  | NoConstraints !AssertionTree
+  = SingleEquality !(Equality TensorVariable RatTensor) !(MaybeTrivial (AssertionTree TensorVariable))
+  | Inequalities ![Inequality TensorVariable RatTensor] !(MaybeTrivial (AssertionTree TensorVariable))
 
 instance Pretty ConstrainedAssertionTree where
   pretty = \case
     SingleEquality eq r -> "SingleEquality[" <+> prettyVerbose eq <> "," <+> prettyVerbose r <+> "]"
+    Inequalities [] r -> "NoConstraints[" <+> prettyVerbose r <+> "]"
     Inequalities ineqs r -> "Inequalities[" <+> prettyVerbose ineqs <> "," <+> prettyVerbose r <+> "]"
-    NoConstraints r -> "NoConstraints[" <+> prettyVerbose r <+> "]"
 
 -- | A scheme for pulling out constraints from assertions. Used to control
 -- which assertions are considered valid constraints.
 type ConstraintSearchCriteria =
-  Variable -> Assertion -> ConstrainedAssertionTree
+  UserVariable -> Assertion TensorVariable -> ConstrainedAssertionTree
 
 --------------------------------------------------------------------------------
 -- Algorithm
@@ -50,12 +49,12 @@ findVariableConstraints ::
   forall m.
   (MonadCompile m) =>
   ConstraintSearchCriteria ->
-  Variable ->
-  AssertionTree ->
+  UserVariable ->
+  AssertionTree TensorVariable ->
   m (DisjunctAll ConstrainedAssertionTree)
 findVariableConstraints fromAssertion var = go
   where
-    go :: AssertionTree -> m (DisjunctAll ConstrainedAssertionTree)
+    go :: AssertionTree TensorVariable -> m (DisjunctAll ConstrainedAssertionTree)
     go = \case
       Query assertion -> return $ DisjunctAll [fromAssertion var assertion]
       Disjunct xs -> disjunctDisjuncts <$> traverse go xs
@@ -65,9 +64,9 @@ findVariableConstraints fromAssertion var = go
         return $ snd rs'
 
     andDisjuncts ::
-      (AssertionTree, DisjunctAll ConstrainedAssertionTree) ->
-      AssertionTree ->
-      m (AssertionTree, DisjunctAll ConstrainedAssertionTree)
+      (AssertionTree TensorVariable, DisjunctAll ConstrainedAssertionTree) ->
+      AssertionTree TensorVariable ->
+      m (AssertionTree TensorVariable, DisjunctAll ConstrainedAssertionTree)
     andDisjuncts (x, r1) y = do
       let (shortCircuitedLHS, remainingLHS) = partitionEithers $ fmap (shortCircuitConstraints y) (disjunctsToList r1)
       result <-
@@ -87,21 +86,17 @@ findVariableConstraints fromAssertion var = go
         [] -> compilerDeveloperError "The conjunctions of non-empty disjunctions should be non-empty."
 
     shortCircuitConstraints ::
-      AssertionTree ->
+      AssertionTree TensorVariable ->
       ConstrainedAssertionTree ->
       Either ConstrainedAssertionTree ConstrainedAssertionTree
     shortCircuitConstraints disjunctedTree constraint = case constraint of
       SingleEquality eq remaining -> Left $ SingleEquality eq (andTrivial andBoolExpr remaining (NonTrivial disjunctedTree))
-      Inequalities ineq remaining -> Right (Inequalities ineq remaining)
-      NoConstraints ineq -> Right (NoConstraints ineq)
+      Inequalities ineqs remaining -> Right (Inequalities ineqs remaining)
 
     mergeConstraints ::
       ConstrainedAssertionTree ->
       ConstrainedAssertionTree ->
       ConstrainedAssertionTree
     mergeConstraints c1 c2 = case (c1, c2) of
-      (NoConstraints t1, NoConstraints t2) -> NoConstraints (andBoolExpr t1 t2)
-      (NoConstraints t1, Inequalities ineqs2 t2) -> Inequalities ineqs2 (andTrivial andBoolExpr (NonTrivial t1) t2)
-      (Inequalities ineqs1 t1, NoConstraints t2) -> Inequalities ineqs1 (andTrivial andBoolExpr t1 (NonTrivial t2))
       (Inequalities ineqs1 t1, Inequalities ineqs2 t2) -> Inequalities (ineqs1 <> ineqs2) (andTrivial andBoolExpr t1 t2)
       _ -> developerError "Impossible - should be no equality constraints after short-circuiting"

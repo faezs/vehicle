@@ -1,13 +1,12 @@
 module Vehicle.Compile.Type.Meta
   ( MetaSet,
+    MetaVariableContext,
     MetaInfo (..),
-    MetaCtxSize,
     extendMetaCtx,
     HasMetas (..),
     makeMetaType,
-    makeMetaExpr,
     getMetaDependencies,
-    getNormMetaDependencies,
+    findMetaInfo,
   )
 where
 
