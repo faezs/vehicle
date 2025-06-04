@@ -1,3 +1,4 @@
+{-# OPTIONS_GHC -Wwarn #-}
 module Vehicle.Compile.Print.Error
   ( UserError (..),
     VehicleError (..),
